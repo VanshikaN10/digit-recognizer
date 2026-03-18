@@ -47,26 +47,21 @@ class DigitRecognizerApp:
         self.root.title("✏️ Draw a Digit (0-9)")
         self.root.resizable(False, False)
 
-        # Canvas to draw on
         self.canvas_size = 280
         self.canvas = tk.Canvas(root, width=self.canvas_size,
                                 height=self.canvas_size, bg='black', cursor='cross')
         self.canvas.grid(row=0, column=0, columnspan=3, padx=10, pady=10)
 
-        # PIL image to capture drawing
         self.image = Image.new("L", (self.canvas_size, self.canvas_size), color=0)
         self.draw  = ImageDraw.Draw(self.image)
 
-        # Prediction label
         self.pred_label = Label(root, text="Draw a digit above!",
                                 font=("Helvetica", 20, "bold"), fg="blue")
         self.pred_label.grid(row=1, column=0, columnspan=3, pady=5)
 
-        # Confidence label
         self.conf_label = Label(root, text="", font=("Helvetica", 13), fg="gray")
         self.conf_label.grid(row=2, column=0, columnspan=3, pady=2)
 
-        # Buttons
         Button(root, text="🔍 Predict", font=("Helvetica", 13),
                bg="green", fg="white", command=self.predict).grid(row=3, column=0, padx=10, pady=10)
         Button(root, text="🗑️ Clear", font=("Helvetica", 13),
@@ -74,7 +69,6 @@ class DigitRecognizerApp:
         Button(root, text="❌ Exit", font=("Helvetica", 13),
                bg="gray", fg="white", command=root.quit).grid(row=3, column=2, padx=10, pady=10)
 
-        # Mouse events
         self.canvas.bind("<B1-Motion>", self.paint)
         self.canvas.bind("<ButtonRelease-1>", self.auto_predict)
 
@@ -82,7 +76,7 @@ class DigitRecognizerApp:
         self.last_y = None
 
     def paint(self, event):
-        brush = 12
+        brush = 14  # slightly bigger brush
         x, y = event.x, event.y
         if self.last_x and self.last_y:
             self.canvas.create_line(self.last_x, self.last_y, x, y,
@@ -98,19 +92,47 @@ class DigitRecognizerApp:
         self.last_y = None
         self.predict()
 
-    def predict(self):
-        # Resize to 28x28 like MNIST
-        img = self.image.resize((28, 28), Image.LANCZOS)
-        img_array = np.array(img) / 255.0
-        img_array = img_array.reshape(1, 784)
+    def preprocess(self):
+        # ── KEY FIX: match MNIST preprocessing exactly ──
 
-        # Predict
+        # Step 1 — crop tightly around the digit
+        bbox = self.image.getbbox()
+        if bbox is None:
+            return None
+        img = self.image.crop(bbox)
+
+        # Step 2 — add padding around digit (like MNIST has)
+        pad = 30
+        img = ImageOps.expand(img, border=pad, fill=0)
+
+        # Step 3 — resize to 20x20 keeping aspect ratio, then center in 28x28
+        img.thumbnail((20, 20), Image.LANCZOS)
+        new_img = Image.new("L", (28, 28), 0)
+        offset_x = (28 - img.width)  // 2
+        offset_y = (28 - img.height) // 2
+        new_img.paste(img, (offset_x, offset_y))
+
+        # Step 4 — normalize
+        img_array = np.array(new_img) / 255.0
+        img_array = img_array.reshape(1, 784)
+        return img_array
+
+    def predict(self):
+        img_array = self.preprocess()
+        if img_array is None:
+            self.pred_label.config(text="Draw something first!")
+            return
+
         prediction = self.model.predict(img_array, verbose=0)
         digit      = np.argmax(prediction)
         confidence = np.max(prediction) * 100
 
+        # show top 3 guesses
+        top3_idx  = np.argsort(prediction[0])[::-1][:3]
+        top3_text = "  |  ".join([f"{i}: {prediction[0][i]*100:.1f}%" for i in top3_idx])
+
         self.pred_label.config(text=f"Prediction: {digit} 🎯")
-        self.conf_label.config(text=f"Confidence: {confidence:.1f}%")
+        self.conf_label.config(text=f"Confidence: {confidence:.1f}%\nTop 3: {top3_text}")
 
     def clear(self):
         self.canvas.delete("all")
